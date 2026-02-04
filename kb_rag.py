@@ -179,12 +179,37 @@ class KnowledgeBaseRAG:
                 streaming=True
             )
         
+        # Cria retriever customizado que usa busca híbrida
+        from langchain.schema.retriever import BaseRetriever
+        from langchain.schema import Document
+        from typing import List
+        
+        class HybridRetriever(BaseRetriever):
+            vectorstore: any
+            k: int = 8
+            
+            def _get_relevant_documents(self, query: str) -> List[Document]:
+                # Busca semântica ampla
+                all_results = self.vectorstore.similarity_search(query, k=self.k*3)
+                
+                # Filtra por palavra-chave se encontrar
+                query_lower = query.lower()
+                filtered = [
+                    doc for doc in all_results 
+                    if any(word in doc.page_content.lower() for word in query_lower.split())
+                ]
+                
+                return filtered[:self.k] if filtered else all_results[:self.k]
+            
+            async def _aget_relevant_documents(self, query: str) -> List[Document]:
+                return self._get_relevant_documents(query)
+        
+        retriever = HybridRetriever(vectorstore=self.vectorstore, k=8)
+        
         self.qa_chain = RetrievalQA.from_chain_type(
             llm=llm,
             chain_type="stuff",
-            retriever=self.vectorstore.as_retriever(
-                search_kwargs={"k": 5}
-            ),
+            retriever=retriever,
             return_source_documents=True
         )
         print("✅ Sistema pronto para consultas!")
@@ -213,6 +238,41 @@ class KnowledgeBaseRAG:
             print(f"\n📊 Total de chunks no banco: {len(all_docs.get('ids', []))}")
         except Exception as e:
             print(f"❌ Erro ao listar arquivos: {e}")
+    
+    def search_raw(self, query: str, k: int = 10):
+        """Busca direta no vectorstore sem LLM (para debug)."""
+        if not self.vectorstore:
+            print("❌ Banco vetorial não carregado")
+            return
+        
+        print(f"\n🔍 Buscando por: '{query}'\n")
+        results = self.vectorstore.similarity_search(query, k=k)
+        
+        print(f"Encontrados {len(results)} chunks:\n")
+        for i, doc in enumerate(results, 1):
+            source = Path(doc.metadata.get('source', 'Desconhecido')).name
+            preview = doc.page_content[:200].replace('\n', ' ')
+            print(f"{i}. [{source}]")
+            print(f"   {preview}...\n")
+    
+    def search_hybrid(self, query: str, k: int = 10):
+        """Busca híbrida: filtra por palavra-chave + ranking semântico."""
+        if not self.vectorstore:
+            print("❌ Banco vetorial não carregado")
+            return []
+        
+        # Pega mais resultados da busca semântica
+        all_results = self.vectorstore.similarity_search(query, k=k*3)
+        
+        # Filtra resultados que contêm a palavra-chave exata (case-insensitive)
+        query_lower = query.lower()
+        filtered = [
+            doc for doc in all_results 
+            if query_lower in doc.page_content.lower()
+        ]
+        
+        # Se encontrou com filtro, retorna filtrados. Senão, retorna todos
+        return filtered[:k] if filtered else all_results[:k]
     
     def query(self, question: str) -> dict:
         """
@@ -259,9 +319,10 @@ def main():
     print("\n" + "="*80)
     print("💬 Sistema pronto! Digite suas perguntas (ou 'sair' para encerrar)")
     print("\n📌 Comandos especiais:")
-    print("   /listar  - Lista arquivos indexados")
-    print("   /rebuild - Reconstrói o banco vetorial")
-    print("   sair     - Encerra o programa")
+    print("   /listar         - Lista arquivos indexados")
+    print("   /buscar <termo> - Busca direta sem LLM (debug)")
+    print("   /rebuild        - Reconstrói o banco vetorial")
+    print("   sair            - Encerra o programa")
     print("="*80 + "\n")
     
     # Loop interativo de perguntas
@@ -275,6 +336,24 @@ def main():
             # Comandos especiais
             if pergunta.lower() == '/listar':
                 kb.list_indexed_files()
+                print("\n" + "="*80 + "\n")
+                continue
+            
+            if pergunta.lower().startswith('/buscar '):
+                termo = pergunta[8:].strip()
+                if termo:
+                    # Busca híbrida
+                    results = kb.search_hybrid(termo, k=10)
+                    print(f"\n🔍 Busca híbrida por: '{termo}'")
+                    print(f"Encontrados {len(results)} chunks com a palavra-chave:\n")
+                    for i, doc in enumerate(results, 1):
+                        source = Path(doc.metadata.get('source', 'Desconhecido')).name
+                        # Destaca a palavra no preview
+                        preview = doc.page_content[:300].replace('\n', ' ')
+                        print(f"{i}. [{source}]")
+                        print(f"   {preview}...\n")
+                else:
+                    print("❌ Use: /buscar <termo>")
                 print("\n" + "="*80 + "\n")
                 continue
             
