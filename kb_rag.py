@@ -18,7 +18,7 @@ class KnowledgeBaseRAG:
     """Sistema RAG para consulta de base de conhecimento em Markdown."""
     
     def __init__(self, 
-                 docs_path: str = "./docs", 
+                 docs_path: str = None, 
                  persist_dir: str = "./chroma_db",
                  provider: Literal["openai", "lmstudio"] = "lmstudio",
                  lmstudio_url: str = "http://localhost:1234/v1",
@@ -27,13 +27,18 @@ class KnowledgeBaseRAG:
         Inicializa o sistema RAG.
         
         Args:
-            docs_path: Caminho para diretório com arquivos markdown
+            docs_path: Caminho para diretório com arquivos markdown (padrão: lê do .env ou usa ./docs)
             persist_dir: Diretório para persistir o banco vetorial
             provider: "openai" ou "lmstudio" (padrão: lmstudio)
             lmstudio_url: URL do servidor LM Studio (padrão: http://localhost:1234/v1)
             embedding_model: Modelo de embeddings local (padrão: all-MiniLM-L6-v2)
         """
         load_dotenv()
+        
+        # Lê docs_path do .env se não for fornecido
+        if docs_path is None:
+            docs_path = os.getenv("DOCS_PATH", "./docs")
+        
         self.docs_path = Path(docs_path)
         self.persist_dir = Path(persist_dir)
         self.provider = provider
