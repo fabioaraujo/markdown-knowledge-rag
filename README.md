@@ -19,14 +19,48 @@ Sistema RAG (Retrieval-Augmented Generation) para criar uma base de conhecimento
 
 Este projeto usa [uv](https://github.com/astral-sh/uv) para gerenciamento de dependências.
 
+### 1️⃣ Instalar dependências básicas
+
+```bash
+# Instalar dependências
+uv sync
 ```
+
+### 2️⃣ Instalar PyTorch com suporte GPU (Recomendado)
+
+⚠️ **IMPORTANTE**: NÃO use `uv run` para executar o projeto, pois ele reinstala o PyTorch CPU!
+
+```bash
+# Instalar PyTorch com CUDA 12.1
+uv pip install --index-url https://download.pytorch.org/whl/cu121 torch torchvision torchaudio
+
+# Verificar GPU
+python check_gpu.py
+```
+
+### 3️⃣ Executar o projeto
+
+```bash
+# ✅ CORRETO - Ativar ambiente e usar python diretamente
+.venv\Scripts\Activate.ps1   # Windows PowerShell
+python kb_rag.py
+
+# ❌ ERRADO - uv run reinstala PyTorch CPU
+# uv run kb_rag.py  # NÃO USE!
+```
+
+💡 **Dica**: Use o script `run.bat` para facilitar: `.\run.bat kb_rag.py`
+
+📖 Guia detalhado GPU: [GPU_SETUP.md](GPU_SETUP.md)
+
+---
 
 ### Opção 1: LM Studio (Local - Recomendado) 🏠
 
 1. **Instale o LM Studio**: https://lmstudio.ai/
 2. **Baixe um modelo** (ex: Mistral-7B, Llama-3.2, Phi-3)
 3. **Inicie o servidor** no LM Studio
-4. **Pronto!** Rode `uv run kb_rag.py`
+4. **Pronto!** Rode `python kb_rag.py`
 
 📖 Guia completo: [LMSTUDIO.md](LMSTUDIO.md)
 
@@ -37,10 +71,7 @@ cp .env.example .env
 # Edite .env e adicione sua OPENAI_API_KEY
 ```
 
-No código, use `provider="openai"Configurar API key
-cp .env.example .env
-# Edite .env e adicione sua OPENAI_API_KEY
-```
+No código, use `provider="openai"`
 
 ## 🎯 Uso
 
@@ -52,9 +83,32 @@ Coloque seus arquivos `.md` na pasta `docs/`:
 docs/
 ├── conceitos.md
 ├── tutoriais.md
-└─LM Studio (Local)
+└── faq.md
+```
+
+### Executar consultas
+
+```bash
+# Ativar ambiente virtual
+.venv\Scripts\Activate.ps1  # Windows
+# source .venv/bin/activate  # Linux/Mac
+
+# Executar
+python kb_rag.py
+
+# Ou use o script auxiliar
+.\run.bat kb_rag.py  # Windows
+```
+
+⚠️ **Não use `uv run`** se instalou PyTorch GPU!
+
+### Uso programático
+
+```python
+from kb_rag import KnowledgeBaseRAG
+
+# LM Studio (Local)
 kb = KnowledgeBaseRAG(
-    docs_path="./docs",
     provider="lmstudio",  # 👈 Modo local!
     lmstudio_url="http://localhost:1234/v1",
     embedding_model="all-MiniLM-L6-v2"

@@ -31,12 +31,18 @@ Recomendações de modelos:
 
 ## 💻 Configuração do Projeto
 
-### Instalar dependências
+### 1. Instalar dependências
 ```bash
+# Dependências básicas
 uv sync
+
+# PyTorch com GPU (acelera embeddings 10-50x)
+uv pip install --index-url https://download.pytorch.org/whl/cu121 torch torchvision torchaudio
 ```
 
-### Executar com LM Studio
+📖 Mais detalhes sobre GPU: [GPU_SETUP.md](GPU_SETUP.md)
+
+### 2. Executar com LM Studio
 ```python
 from kb_rag import KnowledgeBaseRAG
 
@@ -51,10 +57,17 @@ kb.setup()
 kb.query("Sua pergunta aqui")
 ```
 
-### Ou simplesmente rode:
+### Executar o projeto:
 ```bash
-uv run kb_rag.py
+# Ativar ambiente
+.venv\Scripts\Activate.ps1  # Windows
+# source .venv/bin/activate  # Linux/Mac
+
+# Executar
+python kb_rag.py
 ```
+
+⚠️ **Não use `uv run kb_rag.py`** - ele reinstala PyTorch CPU e perde aceleração GPU!
 
 O código já está configurado para usar LM Studio por padrão!
 
@@ -64,6 +77,7 @@ O código já está configurado para usar LM Studio por padrão!
 ✅ **Privacidade Total** - Seus documentos não saem do computador  
 ✅ **Sem Custos** - Não precisa de API keys pagas  
 ✅ **Funciona Offline** - Após baixar os modelos  
+⚡ **Aceleração GPU** - Embeddings 10-50x mais rápidos com CUDA  
 
 ## ⚙️ Embeddings Locais
 

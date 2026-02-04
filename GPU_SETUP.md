@@ -1,22 +1,72 @@
-# Instruções para manter PyTorch com CUDA
+# 🎮 Configuração GPU (CUDA) - Guia Completo
 
-Devido à forma como o `uv run` funciona, ele sempre reinstala as dependências.
+## ⚠️ PROBLEMA: uv run reinstala PyTorch CPU
 
-## ✅ Solução: Usar o ambiente diretamente
+O comando `uv run` sempre sincroniza as dependências do `pyproject.toml`, que por padrão instala PyTorch CPU. Isso sobrescreve a instalação GPU!
 
-### 1. Instalar PyTorch com CUDA uma vez:
+## ✅ SOLUÇÃO: Usar o ambiente virtual diretamente
+
+### 1. Verificar se tem GPU NVIDIA
 ```bash
-uv pip install --index-url https://download.pytorch.org/whl/cu121 torch torchvision torchaudio
+nvidia-smi
 ```
 
-### 2. Ativar o ambiente e usar python diretamente:
+Deve mostrar sua placa de vídeo e versão CUDA.
+
+### 2. Instalar dependências básicas
 ```bash
-# Ativar ambiente
+uv sync
+```
+
+### 3. Instalar PyTorch com CUDA
+```bash
+# Para CUDA 12.1 (mais comum)
+uv pip install --index-url https://download.pytorch.org/whl/cu121 torch torchvision torchaudio
+
+# Para CUDA 11.8 (GPUs mais antigas)
+# uv pip install --index-url https://download.pytorch.org/whl/cu118 torch torchvision torchaudio
+```
+
+### 4. Verificar instalação
+```bash
+python check_gpu.py
+```
+
+Deve mostrar:
+```
+✅ GPU DISPONÍVEL!
+   GPU: NVIDIA GeForce RTX 4070
+   CUDA Version: 12.1
+   Memória Total: 11.99 GB
+```
+
+### 5. Executar o projeto
+
+**Opção A: Ativando o ambiente (Recomendado)**
+```bash
+# Windows PowerShell
 .venv\Scripts\Activate.ps1
 
-# Rodar scripts
+# Linux/Mac
+# source .venv/bin/activate
+
+# Agora pode usar python normalmente
 python kb_rag.py
 python check_gpu.py
+```
+
+**Opção B: Script auxiliar**
+```bash
+# Windows
+.\run.bat kb_rag.py
+
+# O script run.bat executa direto no ambiente sem ativar
+```
+
+**❌ NÃO FAÇA ISSO:**
+```bash
+# Isso vai reinstalar PyTorch CPU!
+uv run kb_rag.py  # ❌ ERRADO
 ```
 
 ### Ou use um alias:
