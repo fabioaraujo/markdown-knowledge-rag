@@ -63,6 +63,8 @@ class KnowledgeBaseRAG:
         documents = []
         md_files = list(self.docs_path.rglob("*.md"))
         
+        print(f"   Encontrados {len(md_files)} arquivos .md")
+        
         for file_path in md_files:
             try:
                 with open(file_path, 'r', encoding='utf-8') as f:
@@ -72,10 +74,11 @@ class KnowledgeBaseRAG:
                     metadata={"source": str(file_path)}
                 )
                 documents.append(doc)
+                print(f"   ✓ {file_path.name} ({len(content)} caracteres)")
             except Exception as e:
-                print(f"❌ Erro ao carregar {file_path}: {e}")
+                print(f"   ❌ Erro ao carregar {file_path}: {e}")
         
-        print(f"✅ {len(documents)} documentos carregados")
+        print(f"✅ {len(documents)} documentos carregados com sucesso")
         return documents
     
     def split_documents(self, documents):
@@ -86,7 +89,18 @@ class KnowledgeBaseRAG:
             chunk_overlap=100
         )
         chunks = splitter.split_documents(documents)
-        print(f"✅ {len(chunks)} chunks criados")
+        
+        # Mostra distribuição de chunks por arquivo
+        from collections import Counter
+        sources = [chunk.metadata.get('source', 'Desconhecido') for chunk in chunks]
+        source_counts = Counter(sources)
+        
+        print(f"\n   Chunks por arquivo:")
+        for source, count in source_counts.items():
+            filename = Path(source).name if source != 'Desconhecido' else source
+            print(f"   - {filename}: {count} chunks")
+        
+        print(f"\n✅ Total: {len(chunks)} chunks criados")
         return chunks
     
     def create_vectorstore(self, chunks):
@@ -169,11 +183,36 @@ class KnowledgeBaseRAG:
             llm=llm,
             chain_type="stuff",
             retriever=self.vectorstore.as_retriever(
-                search_kwargs={"k": 3}
+                search_kwargs={"k": 5}
             ),
             return_source_documents=True
         )
         print("✅ Sistema pronto para consultas!")
+    
+    def list_indexed_files(self):
+        """Lista todos os arquivos indexados no banco vetorial."""
+        if not self.vectorstore:
+            print("❌ Banco vetorial não carregado")
+            return
+        
+        try:
+            # Pega uma amostra de todos os documentos
+            all_docs = self.vectorstore.get()
+            sources = set()
+            
+            if 'metadatas' in all_docs and all_docs['metadatas']:
+                for metadata in all_docs['metadatas']:
+                    if metadata and 'source' in metadata:
+                        sources.add(metadata['source'])
+            
+            print(f"\n📚 Arquivos indexados no banco vetorial: {len(sources)}")
+            for source in sorted(sources):
+                filename = Path(source).name
+                print(f"   ✓ {filename}")
+                
+            print(f"\n📊 Total de chunks no banco: {len(all_docs.get('ids', []))}")
+        except Exception as e:
+            print(f"❌ Erro ao listar arquivos: {e}")
     
     def query(self, question: str) -> dict:
         """
@@ -215,10 +254,14 @@ def main():
     )
     
     # Configura (usa banco existente se disponível)
-    kb.setup(force_rebuild=False)
+    kb.setup(force_rebuild=True)
     
     print("\n" + "="*80)
     print("💬 Sistema pronto! Digite suas perguntas (ou 'sair' para encerrar)")
+    print("\n📌 Comandos especiais:")
+    print("   /listar  - Lista arquivos indexados")
+    print("   /rebuild - Reconstrói o banco vetorial")
+    print("   sair     - Encerra o programa")
     print("="*80 + "\n")
     
     # Loop interativo de perguntas
@@ -227,6 +270,19 @@ def main():
             pergunta = input("❓ Sua pergunta: ").strip()
             
             if not pergunta:
+                continue
+            
+            # Comandos especiais
+            if pergunta.lower() == '/listar':
+                kb.list_indexed_files()
+                print("\n" + "="*80 + "\n")
+                continue
+            
+            if pergunta.lower() == '/rebuild':
+                print("\n🔄 Reconstruindo banco vetorial...")
+                kb.setup(force_rebuild=True)
+                print("✅ Banco reconstruído!\n")
+                print("="*80 + "\n")
                 continue
                 
             if pergunta.lower() in ['sair', 'exit', 'quit', 'q']:
