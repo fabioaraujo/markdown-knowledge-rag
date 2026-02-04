@@ -209,7 +209,6 @@ def main():
     
     # Inicializa o sistema
     kb = KnowledgeBaseRAG(
-        docs_path="./docs",
         provider=provider,
         lmstudio_url="http://localhost:1234/v1",  # URL padrão do LM Studio
         embedding_model="all-MiniLM-L6-v2"  # Modelo local de embeddings
@@ -218,15 +217,31 @@ def main():
     # Configura (usa banco existente se disponível)
     kb.setup(force_rebuild=False)
     
-    # Exemplos de consultas
-    perguntas = [
-        "O que é este projeto?",
-        "Como funciona o sistema?",
-    ]
+    print("\n" + "="*80)
+    print("💬 Sistema pronto! Digite suas perguntas (ou 'sair' para encerrar)")
+    print("="*80 + "\n")
     
-    for pergunta in perguntas:
-        kb.query(pergunta)
-        print("\n" + "="*80 + "\n")
+    # Loop interativo de perguntas
+    while True:
+        try:
+            pergunta = input("❓ Sua pergunta: ").strip()
+            
+            if not pergunta:
+                continue
+                
+            if pergunta.lower() in ['sair', 'exit', 'quit', 'q']:
+                print("\n👋 Encerrando sistema. Até logo!")
+                break
+            
+            kb.query(pergunta)
+            print("\n" + "="*80 + "\n")
+            
+        except KeyboardInterrupt:
+            print("\n\n👋 Encerrando sistema. Até logo!")
+            break
+        except Exception as e:
+            print(f"\n❌ Erro: {e}\n")
+            continue
 
 
 if __name__ == "__main__":
