@@ -727,11 +727,8 @@ def main():
     print("💬 Sistema pronto! Digite suas perguntas (ou 'sair' para encerrar)")
     print("\n📌 Comandos especiais:")
     print("   /listar                      - Lista arquivos indexados")
-    print("   /buscar <termo>              - Busca direta sem LLM")
-    print("   /buscar_arquivo <arquivo> <termo> - Busca em arquivo específico")
     print("   /rebuild                     - Reconstrói o banco vetorial")
     print("   sair                         - Encerra o programa")
-    print("\n💡 Dica: Use 'arquivo:nome.md' na pergunta para filtrar por arquivo")
     print("="*80 + "\n")
     
     # Loop interativo de perguntas
@@ -745,92 +742,6 @@ def main():
             # Comandos especiais
             if pergunta.lower() == '/listar':
                 kb.list_indexed_files()
-                print("\n" + "="*80 + "\n")
-                continue
-            
-            if pergunta.lower().startswith('/buscar_arquivo '):
-                # Sintaxe: /buscar_arquivo nome_arquivo.md termo de busca
-                params = pergunta[16:].strip().split(maxsplit=1)
-                if len(params) >= 2:
-                    arquivo, termo = params[0], params[1]
-                    import re
-                    # Busca híbrida com filtro de arquivo
-                    results = kb.search_hybrid(termo, k=20, file_filter=arquivo)
-                    print(f"\n🎯 Busca em '{arquivo}' por: '{termo}'")
-                    print(f"Encontrados {len(results)} chunks:\n")
-                    
-                    if not results:
-                        print("   ❌ Nenhum resultado encontrado. Verifique o nome do arquivo.")
-                    else:
-                        for i, doc in enumerate(results, 1):
-                            source = Path(doc.metadata.get('source', 'Desconhecido')).name
-                            content = doc.page_content
-                            
-                            # Encontra posição da palavra-chave (case-insensitive)
-                            pattern = re.compile(r'\b' + re.escape(termo) + r'\b', re.IGNORECASE)
-                            match = pattern.search(content)
-                            
-                            if match:
-                                pos = match.start()
-                                start = max(0, pos - 150)
-                                end = min(len(content), pos + len(termo) + 150)
-                                context = content[start:end].replace('\n', ' ')
-                                if start > 0:
-                                    context = '...' + context
-                                if end < len(content):
-                                    context = context + '...'
-                                print(f"{i}. [{source}] ✓ MATCH ENCONTRADO")
-                                print(f"   {context}\n")
-                            else:
-                                print(f"{i}. [{source}] ⚠️ SEM MATCH (erro no filtro)")
-                                preview = content[:200].replace('\n', ' ')
-                                print(f"   {preview}...\n")
-                else:
-                    print("❌ Use: /buscar_arquivo <arquivo.md> <termo>")
-                    print("   Exemplo: /buscar_arquivo 2025_08_15.md agosto")
-                print("\n" + "="*80 + "\n")
-                continue
-            
-            if pergunta.lower().startswith('/buscar '):
-                termo = pergunta[8:].strip()
-                if termo:
-                    import re
-                    # Busca híbrida
-                    results = kb.search_hybrid(termo, k=10)
-                    
-                    if not results:
-                        print(f"\n❌ Nenhum resultado encontrado para: '{termo}'")
-                    else:
-                        print(f"\n🔍 Busca híbrida por: '{termo}'")
-                        print(f"Encontrados {len(results)} chunks:\n")
-                        
-                        for i, doc in enumerate(results, 1):
-                            source = Path(doc.metadata.get('source', 'Desconhecido')).name
-                            content = doc.page_content
-                            
-                            # Encontra posição da palavra-chave (case-insensitive)
-                            pattern = re.compile(r'\b' + re.escape(termo) + r'\b', re.IGNORECASE)
-                            match = pattern.search(content)
-                            
-                            if match:
-                                # Mostra contexto ao redor da palavra (150 chars antes e depois)
-                                pos = match.start()
-                                start = max(0, pos - 150)
-                                end = min(len(content), pos + len(termo) + 150)
-                                context = content[start:end].replace('\n', ' ')
-                                if start > 0:
-                                    context = '...' + context
-                                if end < len(content):
-                                    context = context + '...'
-                                print(f"{i}. [{source}] ✓ MATCH ENCONTRADO")
-                                print(f"   {context}\n")
-                            else:
-                                # Se não encontrou match, não deveria estar aqui!
-                                print(f"{i}. [{source}] ⚠️ SEM MATCH (erro no filtro)")
-                                preview = content[:200].replace('\n', ' ')
-                                print(f"   {preview}...\n")
-                else:
-                    print("❌ Use: /buscar <termo>")
                 print("\n" + "="*80 + "\n")
                 continue
             
@@ -856,18 +767,6 @@ def main():
             if pergunta.lower() in ['sair', 'exit', 'quit', 'q']:
                 print("\n👋 Encerrando sistema. Até logo!")
                 break
-            
-            # Detecta filtro de arquivo (sintaxe: arquivo:nome.md resto da pergunta)
-            import re
-            file_match = re.match(r'arquivo:([\w\-_.]+\.md)\s+(.+)', pergunta, re.IGNORECASE)
-            if file_match:
-                file_filter = file_match.group(1)
-                clean_query = file_match.group(2)
-                print(f"\n🎯 Filtrando por arquivo: {file_filter}")
-                # Aqui precisaria passar o filtro para o retriever, mas como usamos chain
-                # vou apenas avisar ao usuário por enquanto
-                print(f"⚠️  Use /buscar_arquivo {file_filter} <termo> para busca filtrada")
-                pergunta = clean_query
             
             kb.query(pergunta)
             print("\n" + "="*80 + "\n")
