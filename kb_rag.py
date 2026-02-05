@@ -66,6 +66,14 @@ class KnowledgeBaseRAG:
             print(f"🏠 Usando LM Studio local em {self.lmstudio_url}")
             print(f"📊 Embeddings: {self.embedding_model}")
     
+    def estimate_tokens(self, text: str) -> int:
+        """Estima número de tokens em um texto.
+        
+        Usa aproximação: 1 token ≈ 3.5 caracteres para português.
+        Não é exato, mas dá uma boa ideia da carga.
+        """
+        return int(len(text) / 3.5)
+    
     def load_documents(self):
         """Carrega todos os arquivos markdown do diretório."""
         print(f"📁 Carregando documentos de {self.docs_path}...")
@@ -592,6 +600,19 @@ class KnowledgeBaseRAG:
         print("✅ Sistema pronto para consultas!")
         print(f"💬 Memória de conversação ativada (últimas 5 mensagens)")
         print(f"📝 Sessão: {self.session_id}")
+        
+        # Informações sobre tokens e performance
+        if self.provider == "lmstudio":
+            print(f"\n⚙️  Configuração de Tokens (LM Studio):")
+            print(f"   💡 O limite de tokens do LM Studio afeta:")
+            print(f"      • Context Length: tamanho máximo do prompt (contexto + pergunta)")
+            print(f"      • Max Tokens: tamanho máximo da resposta gerada")
+            print(f"   📊 Valores típicos:")
+            print(f"      • 2048-4096: Rápido, mas pode truncar contexto grande")
+            print(f"      • 8192: Bom equilíbrio (recomendado)")
+            print(f"      • 16384+: Lento, use apenas se necessário")
+            print(f"   ⚡ Dica: Aumente Context Length, não Max Tokens!")
+            print(f"   🎯 Recuperando {self.retriever.k} documentos por consulta")
     
     def list_indexed_files(self):
         """Lista todos os arquivos indexados no banco vetorial."""
@@ -715,6 +736,10 @@ class KnowledgeBaseRAG:
         
         print(f"\n❓ Pergunta: {question}")
         
+        # Inicia tracking de tempo
+        import time
+        start_time = time.time()
+        
         # Reformula perguntas de "olhar" para serem mais claras
         import re
         reformulated_question = question
@@ -735,10 +760,16 @@ class KnowledgeBaseRAG:
                 break
         
         # Recupera documentos relevantes
+        retrieval_start = time.time()
         docs = self.retriever.invoke(question)
+        retrieval_time = time.time() - retrieval_start
         
         # Monta contexto com documentos
         context = "\n\n---\n\n".join([doc.page_content for doc in docs])
+        
+        # Conta tokens do contexto
+        context_tokens = self.estimate_tokens(context)
+        question_tokens = self.estimate_tokens(question)
         
         # Monta histórico de conversação (últimas 5 mensagens)
         history_text = ""
@@ -769,8 +800,13 @@ PERGUNTA: {reformulated_question}
 
 RESPOSTA COMPLETA:"""
         
+        # Conta tokens do prompt completo
+        prompt_tokens = self.estimate_tokens(prompt)
+        
         # Chama o LLM
+        llm_start = time.time()
         response = self.llm.invoke(prompt)
+        llm_time = time.time() - llm_start
         
         # Extrai texto da resposta
         if hasattr(response, 'content'):
@@ -778,7 +814,35 @@ RESPOSTA COMPLETA:"""
         else:
             answer = str(response)
         
+        # Calcula tokens da resposta e totais
+        answer_tokens = self.estimate_tokens(answer)
+        total_tokens = prompt_tokens + answer_tokens
+        total_time = time.time() - start_time
+        
         print(f"\n💡 Resposta: {answer}")
+        
+        # Mostra estatísticas de tokens e performance
+        print(f"\n📊 Estatísticas:")
+        print(f"   🔍 Recuperação: {retrieval_time:.2f}s ({len(docs)} documentos)")
+        print(f"   🤖 LLM: {llm_time:.2f}s")
+        print(f"   ⏱️  Total: {total_time:.2f}s")
+        print(f"\n🎯 Tokens:")
+        print(f"   📄 Contexto: {context_tokens:,} tokens ({len(context):,} chars)")
+        print(f"   ❓ Pergunta: {question_tokens:,} tokens")
+        print(f"   📝 Prompt completo: {prompt_tokens:,} tokens")
+        print(f"   💬 Resposta: {answer_tokens:,} tokens")
+        print(f"   📦 Total: {total_tokens:,} tokens")
+        
+        # Análise de performance
+        tokens_per_second = answer_tokens / llm_time if llm_time > 0 else 0
+        print(f"   ⚡ Velocidade: {tokens_per_second:.1f} tokens/s")
+        
+        # Aviso se contexto muito grande
+        if context_tokens > 8000:
+            print(f"   ⚠️  ATENÇÃO: Contexto muito grande! Considere aumentar chunk_size ou reduzir k.")
+        if total_tokens > 16000:
+            print(f"   ⚠️  ATENÇÃO: Total de tokens alto! Isso pode causar lentidão.")
+        
         print(f"\n📚 Fontes ({len(docs)} documentos):")
         sources = []
         for i, doc in enumerate(docs, 1):
