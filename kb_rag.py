@@ -11,7 +11,10 @@ from langchain_text_splitters import MarkdownTextSplitter
 from langchain_openai import OpenAIEmbeddings, ChatOpenAI
 from langchain_community.vectorstores import Chroma
 from langchain_community.embeddings import HuggingFaceEmbeddings
-from langchain_classic.chains.retrieval_qa.base import RetrievalQA
+from langchain_community.chat_message_histories import ChatMessageHistory
+from langchain_core.prompts import ChatPromptTemplate, MessagesPlaceholder
+from langchain_core.runnables.history import RunnableWithMessageHistory
+from datetime import datetime
 
 
 class KnowledgeBaseRAG:
@@ -46,7 +49,14 @@ class KnowledgeBaseRAG:
         self.embedding_model = embedding_model
         self.vectorstore = None
         self.qa_chain = None
+        self.llm = None  # Armazena LLM para reutilização
+        self.retriever = None  # Armazena retriever para reutilização
         self.parent_documents = {}  # Cache de documentos completos para Parent Document Retrieval
+        self.chat_history = []  # Histórico de conversação para salvamento
+        self.conversation_memory = []  # Memória curta para contexto (últimas 5 mensagens)
+        self.session_id = None  # ID da sessão atual
+        self.history_dir = Path("./chat_history")  # Diretório para salvar históricos
+        self.history_dir.mkdir(exist_ok=True)  # Cria diretório se não existir
         
         # Valida configuração baseada no provider
         if self.provider == "openai":
@@ -508,49 +518,21 @@ class KnowledgeBaseRAG:
             async def _aget_relevant_documents(self, query: str) -> List[Document]:
                 return self._get_relevant_documents(query)
         
-        retriever = HybridRetriever(
+        # Armazena retriever e LLM para uso posterior
+        self.retriever = HybridRetriever(
             vectorstore=self.vectorstore,
             parent_documents=self.parent_documents,  # Passa cache de documentos pais
             k=10,  # Aumentado para 10 documentos únicos (com contexto completo)
             search_all=False  # Mude para True para carregar TODOS os chunks
         )
         
-        # Prompt customizado que força a IA a usar o contexto fornecido
-        from langchain_core.prompts import PromptTemplate
+        self.llm = llm
         
-        prompt_template = """Você é um assistente pessoal que responde perguntas com base em uma base de conhecimento pessoal.
-
-INSTRUÇÕES IMPORTANTES:
-1. Use SEMPRE e SOMENTE as informações fornecidas no CONTEXTO abaixo para responder
-2. Se a pergunta pedir para "olhar", "resumir" ou perguntar "o que aconteceu" em uma data ou arquivo:
-   - Resuma TODO o conteúdo disponível no contexto
-   - Liste todos os eventos, atividades, pensamentos e informações presentes
-   - Seja completo e detalhado, não omita nada
-3. Se não houver informação relevante no contexto, diga claramente que não há informações
-4. NUNCA invente ou invente informações que não estejam explicitamente no contexto
-5. Seja específico e cite detalhes do contexto quando relevantes
-6. Se o contexto contiver um arquivo de diário ou notas, resuma todo o seu conteúdo
-
-CONTEXTO:
-{context}
-
-PERGUNTA: {question}
-
-RESPOSTA COMPLETA:"""
-        
-        PROMPT = PromptTemplate(
-            template=prompt_template,
-            input_variables=["context", "question"]
-        )
-        
-        self.qa_chain = RetrievalQA.from_chain_type(
-            llm=llm,
-            chain_type="stuff",
-            retriever=retriever,
-            return_source_documents=True,
-            chain_type_kwargs={"prompt": PROMPT}
-        )
+        # Inicia nova sessão
+        self.session_id = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
         print("✅ Sistema pronto para consultas!")
+        print(f"💬 Memória de conversação ativada (últimas 5 mensagens)")
+        print(f"📝 Sessão: {self.session_id}")
     
     def list_indexed_files(self):
         """Lista todos os arquivos indexados no banco vetorial."""
@@ -661,7 +643,7 @@ RESPOSTA COMPLETA:"""
     
     def query(self, question: str) -> dict:
         """
-        Faz uma consulta à base de conhecimento.
+        Faz uma consulta à base de conhecimento com contexto de conversação.
         
         Args:
             question: Pergunta a ser respondida
@@ -669,12 +651,12 @@ RESPOSTA COMPLETA:"""
         Returns:
             Dict com resposta e documentos fonte
         """
-        if not self.qa_chain:
+        if not self.llm or not self.retriever:
             raise RuntimeError("Sistema não configurado. Execute setup() primeiro.")
         
         print(f"\n❓ Pergunta: {question}")
         
-        # Reformula perguntas de "olhar" para serem mais claras (mas mantém original para busca)
+        # Reformula perguntas de "olhar" para serem mais claras
         import re
         reformulated_question = question
         
@@ -687,23 +669,159 @@ RESPOSTA COMPLETA:"""
         for pattern, template in look_patterns:
             match = re.match(pattern, question.lower().strip())
             if match:
-                # Pega o último grupo capturado (que contém a data/termo)
                 target = match.group(match.lastindex)
                 reformulated_question = template.format(target)
                 if reformulated_question != question:
                     print(f"   🔄 Pergunta reformulada para LLM: {reformulated_question}")
                 break
         
-        # Usa pergunta ORIGINAL para busca (mantém palavras-chave), reformulada para LLM
-        result = self.qa_chain.invoke({"query": question})
+        # Recupera documentos relevantes
+        docs = self.retriever.invoke(question)
         
-        print(f"\n💡 Resposta: {result['result']}")
-        print(f"\n📚 Fontes ({len(result['source_documents'])} documentos):")
-        for i, doc in enumerate(result['source_documents'], 1):
+        # Monta contexto com documentos
+        context = "\n\n---\n\n".join([doc.page_content for doc in docs])
+        
+        # Monta histórico de conversação (últimas 5 mensagens)
+        history_text = ""
+        if self.conversation_memory:
+            history_text = "\n\nHISTÓRICO DA CONVERSA (para contexto):\n"
+            for msg in self.conversation_memory[-5:]:  # Últimas 5
+                history_text += f"Usuário: {msg['question']}\n"
+                history_text += f"Assistente: {msg['answer']}\n\n"
+        
+        # Prompt completo com histórico
+        prompt = f"""Você é um assistente pessoal que responde perguntas com base em uma base de conhecimento pessoal.
+
+INSTRUÇÕES IMPORTANTES:
+1. Use SEMPRE e SOMENTE as informações fornecidas no CONTEXTO abaixo para responder
+2. Você pode usar o HISTÓRICO DA CONVERSA para entender referências a mensagens anteriores
+3. Se a pergunta pedir para "olhar", "resumir" ou perguntar "o que aconteceu" em uma data ou arquivo:
+   - Resuma TODO o conteúdo disponível no contexto
+   - Liste todos os eventos, atividades, pensamentos e informações presentes
+   - Seja completo e detalhado, não omita nada
+4. Se não houver informação relevante no contexto, diga claramente que não há informações
+5. NUNCA invente informações que não estejam explicitamente no contexto
+6. Seja específico e cite detalhes do contexto quando relevantes
+{history_text}
+CONTEXTO:
+{context}
+
+PERGUNTA: {reformulated_question}
+
+RESPOSTA COMPLETA:"""
+        
+        # Chama o LLM
+        response = self.llm.invoke(prompt)
+        
+        # Extrai texto da resposta
+        if hasattr(response, 'content'):
+            answer = response.content
+        else:
+            answer = str(response)
+        
+        print(f"\n💡 Resposta: {answer}")
+        print(f"\n📚 Fontes ({len(docs)} documentos):")
+        sources = []
+        for i, doc in enumerate(docs, 1):
             source = doc.metadata.get('source', 'Desconhecido')
+            sources.append(source)
             print(f"  {i}. {source}")
         
-        return result
+        # Adiciona à memória de conversação (limitada a 5)
+        self.conversation_memory.append({
+            "question": question,
+            "answer": answer
+        })
+        if len(self.conversation_memory) > 5:
+            self.conversation_memory.pop(0)  # Remove a mais antiga
+        
+        # Armazena no histórico completo para salvamento
+        self.chat_history.append({
+            "timestamp": datetime.now().isoformat(),
+            "question": question,
+            "answer": answer,
+            "sources": sources
+        })
+        
+        # Auto-save após cada resposta
+        self.save_history(auto=True)
+        
+        return {
+            "result": answer,
+            "answer": answer,
+            "source_documents": docs
+        }
+    
+    def save_history(self, auto: bool = False):
+        """Salva o histórico de conversação em Markdown."""
+        if not self.chat_history:
+            if not auto:
+                print("⚠️ Nenhuma conversa para salvar")
+            return
+        
+        filename = f"{self.session_id}.md"
+        filepath = self.history_dir / filename
+        
+        # Gera Markdown formatado
+        session_name = self.session_id.replace('_', ' ')
+        now = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+        
+        md_content = f"# Sessão de Chat - {session_name}\n\n"
+        md_content += f"**Criado em:** {now}\n"
+        md_content += f"**Total de mensagens:** {len(self.chat_history)}\n\n"
+        md_content += "---\n"
+        
+        for i, msg in enumerate(self.chat_history, 1):
+            timestamp = datetime.fromisoformat(msg['timestamp']).strftime('%H:%M:%S')
+            md_content += f"\n## 🗨️ Conversa #{i}\n"
+            md_content += f"**⏰ {timestamp}**\n\n"
+            md_content += f"**❓ Você:**\n{msg['question']}\n\n"
+            md_content += f"**💡 Assistente:**\n{msg['answer']}\n\n"
+            
+            if msg['sources']:
+                md_content += f"**📚 Fontes ({len(msg['sources'])}):**\n"
+                for source in msg['sources']:
+                    source_name = Path(source).name if source != 'Desconhecido' else source
+                    md_content += f"- {source_name}\n"
+            
+            md_content += "\n---\n"
+        
+        with open(filepath, 'w', encoding='utf-8') as f:
+            f.write(md_content)
+        
+        if not auto:
+            print(f"✅ Histórico salvo em: {filepath}")
+    
+    def load_history(self):
+        """Lista e permite carregar sessões anteriores."""
+        history_files = sorted(self.history_dir.glob("*.md"), reverse=True)
+        
+        if not history_files:
+            print("📭 Nenhuma sessão anterior encontrada")
+            return
+        
+        print(f"\n📚 Sessões disponíveis ({len(history_files)}):")
+        for i, file in enumerate(history_files[:10], 1):  # Mostra últimas 10
+            session_name = file.stem.replace('_', ' ')
+            file_size = file.stat().st_size
+            print(f"  {i}. {session_name} ({file_size} bytes)")
+        
+        print("\n⚠️ Nota: Carregar sessões antigas ainda não implementado (só visualização)")
+        print("   Use um editor de texto/Markdown para revisar as conversas")
+    
+    def clear_history(self):
+        """Limpa o histórico da sessão atual (mas mantém arquivo salvo)."""
+        # Limpa memória de conversação
+        self.conversation_memory = []
+        
+        # Inicia nova sessão
+        old_session = self.session_id
+        self.session_id = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
+        self.chat_history = []
+        
+        print(f"🧹 Histórico limpo!")
+        print(f"   Sessão antiga: {old_session} (salva em arquivo)")
+        print(f"   Nova sessão: {self.session_id}")
 
 
 def main():
@@ -728,6 +846,9 @@ def main():
     print("\n📌 Comandos especiais:")
     print("   /listar                      - Lista arquivos indexados")
     print("   /rebuild                     - Reconstrói o banco vetorial")
+    print("   /limpar                      - Limpa histórico (nova sessão)")
+    print("   /salvar                      - Salva histórico manualmente")
+    print("   /carregar                    - Lista sessões anteriores")
     print("   sair                         - Encerra o programa")
     print("="*80 + "\n")
     
@@ -763,8 +884,25 @@ def main():
                 
                 print("="*80 + "\n")
                 continue
+            
+            if pergunta.lower() == '/limpar':
+                kb.clear_history()
+                print("\n" + "="*80 + "\n")
+                continue
+            
+            if pergunta.lower() == '/salvar':
+                kb.save_history()
+                print("\n" + "="*80 + "\n")
+                continue
+            
+            if pergunta.lower() == '/carregar':
+                kb.load_history()
+                print("\n" + "="*80 + "\n")
+                continue
                 
             if pergunta.lower() in ['sair', 'exit', 'quit', 'q']:
+                # Salva histórico antes de sair
+                kb.save_history()
                 print("\n👋 Encerrando sistema. Até logo!")
                 break
             
@@ -772,7 +910,10 @@ def main():
             print("\n" + "="*80 + "\n")
             
         except KeyboardInterrupt:
-            print("\n\n👋 Encerrando sistema. Até logo!")
+            # Salva antes de sair mesmo com Ctrl+C
+            print("\n")
+            kb.save_history()
+            print("\n👋 Encerrando sistema. Até logo!")
             break
         except Exception as e:
             print(f"\n❌ Erro: {e}\n")

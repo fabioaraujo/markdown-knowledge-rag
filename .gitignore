@@ -18,6 +18,9 @@ ENV/
 # ChromaDB
 chroma_db/
 
+# Chat History
+chat_history/
+
 # IDEs
 .vscode/
 .idea/
