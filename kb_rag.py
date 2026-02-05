@@ -7,7 +7,7 @@ from pathlib import Path
 from typing import Literal
 from dotenv import load_dotenv
 from langchain_community.document_loaders import DirectoryLoader
-from langchain_text_splitters import MarkdownTextSplitter
+from langchain_text_splitters import MarkdownHeaderTextSplitter, RecursiveCharacterTextSplitter
 from langchain_openai import OpenAIEmbeddings, ChatOpenAI
 from langchain_community.vectorstores import Chroma
 from langchain_community.embeddings import HuggingFaceEmbeddings
@@ -98,37 +98,82 @@ class KnowledgeBaseRAG:
         return documents
     
     def split_documents(self, documents):
-        """Divide documentos em chunks menores."""
-        print("✂️ Dividindo documentos em chunks...")
-        # Melhoria 1: Aumenta overlap de 100 para 200 (20% do chunk_size)
-        splitter = MarkdownTextSplitter(
-            chunk_size=1000,
+        """Divide documentos em chunks menores usando cabeçalhos Markdown."""
+        print("✂️ Dividindo documentos em chunks por cabeçalhos Markdown...")
+        
+        # Define os cabeçalhos Markdown a serem usados para dividir
+        headers_to_split_on = [
+            ("#", "Header 1"),
+            ("##", "Header 2"),
+            ("###", "Header 3"),
+        ]
+        
+        # Cria o splitter por cabeçalhos
+        markdown_splitter = MarkdownHeaderTextSplitter(
+            headers_to_split_on=headers_to_split_on,
+            strip_headers=False  # Mantém os cabeçalhos no conteúdo
+        )
+        
+        # Splitter secundário para chunks muito grandes
+        text_splitter = RecursiveCharacterTextSplitter(
+            chunk_size=2000,
             chunk_overlap=200
         )
-        chunks = splitter.split_documents(documents)
         
-        # Melhoria 2: Armazena documentos completos para Parent Document Retrieval
+        all_chunks = []
+        
         for doc in documents:
             source = doc.metadata.get('source')
+            
+            # Armazena documento completo para Parent Document Retrieval
             if source:
                 self.parent_documents[source] = doc.page_content
-        
-        # Adiciona referência ao documento pai em cada chunk
-        for chunk in chunks:
-            chunk.metadata['parent_source'] = chunk.metadata.get('source')
+            
+            try:
+                # Divide por cabeçalhos
+                header_chunks = markdown_splitter.split_text(doc.page_content)
+                
+                for chunk in header_chunks:
+                    # Preserva metadata do documento original
+                    chunk.metadata.update(doc.metadata)
+                    chunk.metadata['parent_source'] = source
+                    
+                    # Se o chunk for muito grande, divide novamente
+                    if len(chunk.page_content) > 2000:
+                        sub_chunks = text_splitter.split_documents([chunk])
+                        for sub_chunk in sub_chunks:
+                            sub_chunk.metadata.update(chunk.metadata)
+                        all_chunks.extend(sub_chunks)
+                    else:
+                        all_chunks.append(chunk)
+                        
+            except Exception as e:
+                # Fallback: se falhar, usa splitter simples
+                print(f"   ⚠️ Erro ao dividir {Path(source).name} por cabeçalhos, usando fallback: {e}")
+                fallback_chunks = text_splitter.split_documents([doc])
+                for chunk in fallback_chunks:
+                    chunk.metadata['parent_source'] = source
+                all_chunks.extend(fallback_chunks)
         
         # Mostra distribuição de chunks por arquivo
         from collections import Counter
-        sources = [chunk.metadata.get('source', 'Desconhecido') for chunk in chunks]
+        sources = [chunk.metadata.get('source', 'Desconhecido') for chunk in all_chunks]
         source_counts = Counter(sources)
         
-        print(f"\n   Chunks por arquivo:")
+        print(f"\n   📊 Chunks por arquivo:")
         for source, count in source_counts.items():
             filename = Path(source).name if source != 'Desconhecido' else source
-            print(f"   - {filename}: {count} chunks")
+            # Mostra os cabeçalhos encontrados no primeiro chunk (se houver)
+            first_chunk = next((c for c in all_chunks if c.metadata.get('source') == source), None)
+            headers_info = ""
+            if first_chunk:
+                headers = [f"{k}" for k in first_chunk.metadata.keys() if k.startswith('Header')]
+                if headers:
+                    headers_info = f" (cabeçalhos: {', '.join(headers)})"
+            print(f"   - {filename}: {count} chunks{headers_info}")
         
-        print(f"\n✅ Total: {len(chunks)} chunks criados")
-        return chunks
+        print(f"\n✅ Total: {len(all_chunks)} chunks criados (divisão por cabeçalhos)")
+        return all_chunks
     
     def create_vectorstore(self, chunks):
         """Cria e persiste o banco vetorial."""
@@ -367,6 +412,13 @@ class KnowledgeBaseRAG:
                     ]
                     print(f"   📁 Documentos após filtro de data: {len(all_results)}")
                 
+                # Detecta se a busca é sobre Strava
+                strava_keywords = ['strava', 'corrida', 'run', 'treino', 'atividade', 'exercicio', 'exercício']
+                is_strava_query = any(keyword in query_lower for keyword in strava_keywords)
+                
+                if is_strava_query:
+                    print(f"   🏃 Busca relacionada a Strava/corridas detectada")
+                
                 # Tokeniza query em palavras relevantes (> 2 caracteres)
                 query_words = [word.lower() for word in query.split() if len(word) > 2]
                 
@@ -413,6 +465,7 @@ class KnowledgeBaseRAG:
                 for idx, (doc, semantic_score) in enumerate(all_results):
                     content_lower = doc.page_content.lower()
                     source_name = doc.metadata.get('source', '')
+                    source_name_lower = source_name.lower()
                     
                     # Conta matches com word boundaries
                     keyword_matches = 0
@@ -434,14 +487,20 @@ class KnowledgeBaseRAG:
                     # Bonus: se o nome do arquivo contém a palavra-chave principal
                     filename_bonus = 0
                     for word in primary_keywords:
-                        if word in source_name.lower():
+                        if word in source_name_lower:
                             filename_bonus = 1000  # Prioridade máxima
                             break
                     
-                    # Se tem matches relevantes, adiciona aos resultados
-                    if primary_keyword_matches > 0 or keyword_matches > 0 or filename_bonus > 0:
-                        # Score combinado: prioriza matches de palavras-chave principais
-                        combined_score = (primary_keyword_matches * 1000) + (keyword_matches * 100) + filename_bonus - (semantic_score * 10) - (idx * 0.1)
+                    # SUPER BONUS: Se é busca sobre Strava e o arquivo é strava_*.md
+                    strava_bonus = 0
+                    if is_strava_query and 'strava' in source_name_lower:
+                        strava_bonus = 5000  # Prioridade MÁXIMA para arquivos do Strava
+                        print(f"   ⭐⭐⭐ STRAVA: {Path(source_name).name}")
+                    
+                    # Se tem matches relevantes OU é arquivo do Strava em busca relacionada
+                    if primary_keyword_matches > 0 or keyword_matches > 0 or filename_bonus > 0 or strava_bonus > 0:
+                        # Score combinado: prioriza arquivos do Strava em buscas relacionadas
+                        combined_score = strava_bonus + (primary_keyword_matches * 1000) + (keyword_matches * 100) + filename_bonus - (semantic_score * 10) - (idx * 0.1)
                         scored_results.append((doc, combined_score, primary_keyword_matches, keyword_matches))
                 
                 # Ordena por relevância (maior score primeiro)
